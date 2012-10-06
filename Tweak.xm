@@ -34,13 +34,41 @@ the generation of a class list and an automatic constructor.
 */
 #include <dlfcn.h>
 #include "mach_hook/mach_hook.h"
+#include <sys/stat.h>
 
-void* my_dlsym(void* handle, const char* symbol) {
-    NSLog(@"dlsym called: %x %s", handle, symbol);
-    return dlsym(handle, symbol);
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <errno.h>
+int my_connect(int socket, const struct sockaddr *address, socklen_t address_len) {
+    NSLog(@"connect called.");
+    if (address) {
+        struct sockaddr_in * addr = (struct sockaddr_in*)address;
+        if (ntohs(addr->sin_port) == 22 || ntohs(addr->sin_port) == 51022) {
+            NSLog(@"Block probing to local SSH port.");
+            return ETIMEDOUT;
+        }
+    }
+    return connect(socket, address, address_len);
 }
 
+long my_ptrace(int request, pid_t pid, void *addr, void *data) {
+    if (request != 31) // ptrace_deny_attach
+        NSLog(@"Unimplemented ptrace surrogate %d.", request);
+    
+    return 0;
+}
+void* my_dlsym(void* handle, const char* symbol) {
+    NSLog(@"dlsym called: %x %s", handle, symbol);
+    if (!strcmp(symbol, "ptrace")) 
+        return (void*) my_ptrace;
+    else
+        return dlsym(handle, symbol);
+}
 
+int my_stat(const char * path, struct stat * buf) {
+    NSLog(@"stat called: %s", path);
+    return stat(path, buf);
+}
 
 void* hook_libfunc(const char* funcname, void* replacefunc) {
     void *handle = 0;  //handle to store hook-related info
@@ -64,7 +92,7 @@ void* hook_libfunc(const char* funcname, void* replacefunc) {
     handle = mach_hook_init(info.dli_fname, info.dli_fbase);
     if (!handle)
     {
-        fprintf(stderr, "mac_hook_init on %x %s failed!\n", info.dli_fbase, info.dli_fname);
+        fprintf(stderr, "mac_hook_init on %p %s failed!\n", info.dli_fbase, info.dli_fname);
         return NULL;
     }
 
@@ -80,10 +108,25 @@ end:
     return (void*)original;
 }
 
+struct Hook{
+    const char* name;
+    void* func;
+};
+struct Hook hooks[] = {
+    {"dlsym", (void*)my_dlsym},
+    {"stat",  (void*)my_stat},
+    {"connect", (void*)my_connect},
+    {NULL, NULL}
+};
 
 __attribute__((constructor))
 static void initializer() {
     NSLog(@"CloakJB dylib loaded.");
-    if (!hook_libfunc("dlsym", (void*)my_dlsym))
-        NSLog(@"hook_libfunc failed.");
+    for(int i=0; hooks[i].name; i++) {
+        void* ret = hook_libfunc(hooks[i].name, hooks[i].func);
+        if(!ret)
+            NSLog(@"hook_libfunc %s failed.", hooks[i].name);
+        else
+            NSLog(@"hook_libfunc %s succeed: %p.", hooks[i].name, ret);
+        }
 }
