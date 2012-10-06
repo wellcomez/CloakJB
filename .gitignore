@@ -1,3 +1,9 @@
+# theos
+obj/
+.theos/
+.DS_Store
+*.deb
+
 # Xcode
 build/*
 *.pbxuser

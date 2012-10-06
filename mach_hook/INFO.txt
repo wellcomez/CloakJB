@@ -1,0 +1,3 @@
+http://code.google.com/p/mach-hook/source/browse/
+http://www.apriorit.com/our-company/dev-blog/225-dynamic-linking-mach-o
+http://www.apriorit.com/dev-blog/226-imported-function-redirection-in-mach-o
