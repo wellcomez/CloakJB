@@ -102,7 +102,7 @@ uint32_t read_head_offset(int descriptor)  //returns offset to the target mach-o
             cpu_type = fat_arch_i->cputype;
             cpu_type = OSSwapInt32(cpu_type);
 
-			if (CPU_TYPE_I386 == cpu_type)
+			if (CPU_TYPE_ARM == cpu_type)
 			{
 				ret = OSSwapInt32(fat_arch_i->offset);
 
@@ -239,19 +239,16 @@ void *mach_hook_init(char const *library_filename, void const *library_address)
     uint32_t import_table_offset = 0;  //the offset of (__DATA, __la_symbol_ptr) or (__IMPORT, __jump_table)
     uint32_t jump_table_present = 0;  //flag to tell the __IMPORT, __jump_table section is present (seems, only for Leopard)
 
-fprintf(stderr, "1\n");
     if (!library_filename || !library_address)
 		return ret;
 
     descriptor = open(library_filename, O_RDONLY);
 
-fprintf(stderr, "1\n");
     if (descriptor < 0)
         return ret;
 
     head_offset = read_head_offset(descriptor);  //get mach-o header offset, not zero for fat binary
 
-fprintf(stderr, "1\n");
     if (INVALID_OFFSET == head_offset)
         goto free;
 
@@ -376,6 +373,7 @@ mach_substitution mach_hook(void const *h, char const *function_name, mach_subst
 
     if (handle->jump_table_present)  //if we resolve symbols via (__IMPORT, __jump_table)
     {
+        fprintf(stderr, "Incomplete implementation, hook will fail on ARM processor!\n");
         import_table_entry = (size_t *)((char const *)(handle->library_address) + handle->import_table_offset
                                         + import_table_entry_index * (sizeof(uint32_t) + 1));  //compute the address of the target relocation, one entry consists of opcode (1 byte) and 32-bit address
         ret = *(unsigned char *)import_table_entry;  //store the opcode, can be CALL or JMP
@@ -394,10 +392,16 @@ mach_substitution mach_hook(void const *h, char const *function_name, mach_subst
     }
     else  //if we resolve symbols via (__DATA, __la_symbol_ptr)
     {
-        import_table_entry = (size_t *)((char const *)(handle->library_address) + handle->import_table_offset
-                                        + import_table_entry_index * sizeof(size_t));  //compute the address of the target relocation
-        ret = (mach_substitution)(*import_table_entry);  //remember original address
-        *import_table_entry = (size_t)substitution;  //write new
+        //import_table_entry = (size_t *)((char const *)(handle->library_address) + handle->import_table_offset
+        //                                + import_table_entry_index * sizeof(size_t));  //compute the address of the target relocation
+        //ret = (mach_substitution)(*import_table_entry);  //remember original address
+        //*import_table_entry = (size_t)substitution;  //write new
+
+        import_table_entry = (size_t *)( handle->import_table_offset + import_table_entry_index * sizeof(size_t));  //compute the address of the target relocation
+        fprintf(stderr, "import_off %d, import_idx %d, entry: %p\n", handle->import_table_offset, import_table_entry_index, import_table_entry);
+
+        ret = *import_table_entry;
+        *import_table_entry = (size_t) substitution;
     }
 
 end :
