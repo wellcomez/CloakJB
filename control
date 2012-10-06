@@ -1,0 +1,9 @@
+Package: com.xurubin.cloakjb
+Name: CloakJB
+Depends: mobilesubstrate
+Version: 0.0.1
+Architecture: iphoneos-arm
+Description: An awesome MobileSubstrate tweak!
+Maintainer: Rubin Xu
+Author: Rubin Xu
+Section: Tweaks
