@@ -40,7 +40,7 @@ the generation of a class list and an automatic constructor.
 #include <netinet/in.h>
 #include <errno.h>
 int my_connect(int socket, const struct sockaddr *address, socklen_t address_len) {
-    NSLog(@"connect called.");
+    fprintf(stderr, "connect called.");
     if (address) {
         struct sockaddr_in * addr = (struct sockaddr_in*)address;
         if (ntohs(addr->sin_port) == 22 || ntohs(addr->sin_port) == 51022) {
@@ -53,12 +53,12 @@ int my_connect(int socket, const struct sockaddr *address, socklen_t address_len
 
 long my_ptrace(int request, pid_t pid, void *addr, void *data) {
     if (request != 31) // ptrace_deny_attach
-        NSLog(@"Unimplemented ptrace surrogate %d.", request);
+        fprintf(stderr, "Unimplemented ptrace surrogate %d.", request);
     
     return 0;
 }
 void* my_dlsym(void* handle, const char* symbol) {
-    NSLog(@"dlsym called: %x %s", handle, symbol);
+    fprintf(stderr, "dlsym called: %p %s", handle, symbol);
     if (!strcmp(symbol, "ptrace")) 
         return (void*) my_ptrace;
     else
@@ -66,8 +66,13 @@ void* my_dlsym(void* handle, const char* symbol) {
 }
 
 int my_stat(const char * path, struct stat * buf) {
-    NSLog(@"stat called: %s", path);
+    fprintf(stderr, "stat called: %s", path);
     return stat(path, buf);
+}
+
+int my_lstat(const char * path, struct stat * buf) {
+    fprintf(stderr, "lstat called: %s \n", path);
+    return lstat(path, buf);
 }
 
 void* hook_libfunc(const char* funcname, void* replacefunc) {
@@ -115,6 +120,7 @@ struct Hook{
 struct Hook hooks[] = {
     {"dlsym", (void*)my_dlsym},
     {"stat",  (void*)my_stat},
+    {"lstat",  (void*)my_lstat},
     {"connect", (void*)my_connect},
     {NULL, NULL}
 };
