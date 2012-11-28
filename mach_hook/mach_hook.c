@@ -10,22 +10,8 @@
 #include <mach-o/fat.h>
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
-
-#ifdef __x86_64
-    #undef MH_MAGIC
-    #define MH_MAGIC MH_MAGIC_64
-
-    #undef CPU_TYPE_I386
-    #define CPU_TYPE_I386 CPU_TYPE_X86_64
-
-    #undef LC_SEGMENT
-    #define LC_SEGMENT LC_SEGMENT_64
-
-    #define mach_header mach_header_64
-    #define nlist nlist_64
-    #define segment_command segment_command_64
-    #define section section_64
-#endif
+#include <sys/sysctl.h>
+#include <sys/types.h>
 
 #define INVALID_OFFSET 1
 #define JMP_OPCODE '\xE9'
@@ -75,6 +61,7 @@ uint32_t read_head_offset(int descriptor)  //returns offset to the target mach-o
     uint32_t ret = INVALID_OFFSET;  //obviously invalid offset
     uint32_t magic;
     cpu_type_t cpu_type;
+    cpu_subtype_t cpu_subtype;
     uint32_t nfat_arch, i;
     struct fat_arch const *fat_archs = 0, *fat_arch_i;
 
@@ -88,6 +75,19 @@ uint32_t read_head_offset(int descriptor)  //returns offset to the target mach-o
 
     if (FAT_MAGIC == magic)  //if fat binary
     {
+		cpu_type_t		sHostCPU;
+		cpu_subtype_t	sHostCPUsubtype;
+		size_t valSize = sizeof(sHostCPU);
+		if (sysctlbyname ("hw.cputype", &sHostCPU, &valSize, NULL, 0) != 0)  {
+			fprintf(stderr, "Cannot get cputype.\n");
+			return ret;
+		}
+		valSize = sizeof(sHostCPUsubtype);
+		if (sysctlbyname ("hw.cpusubtype", &sHostCPUsubtype, &valSize, NULL, 0) != 0) {
+			fprintf(stderr, "Cannot get cpusubtype.\n");
+			return ret;
+		}
+
         if (sizeof(uint32_t) != read(descriptor, &nfat_arch, sizeof(uint32_t)))
             return ret;
 
@@ -99,14 +99,16 @@ uint32_t read_head_offset(int descriptor)  //returns offset to the target mach-o
 
         for (fat_arch_i = fat_archs, i = 0; i < nfat_arch; ++fat_arch_i, ++i)
         {
-            cpu_type = fat_arch_i->cputype;
-            cpu_type = OSSwapInt32(cpu_type);
+            cpu_type = OSSwapInt32(fat_arch_i->cputype);
+            cpu_subtype = OSSwapInt32(fat_arch_i->cpusubtype);
 
-			if (CPU_TYPE_ARM == cpu_type)
+			if (sHostCPU == cpu_type && sHostCPUsubtype == cpu_subtype)
 			{
 				ret = OSSwapInt32(fat_arch_i->offset);
 
 				break;
+			} else if (sHostCPU == cpu_type) { // Remember the arch for now in case their isn't a perfect subtype match
+				ret = OSSwapInt32(fat_arch_i->offset);
 			}
         }
 
@@ -173,7 +175,7 @@ void read_indirect_table_info(struct load_command const *load_commands, uint32_t
 
                 for (j = 0; j < sections_count; ++j)  //find __la_symbol_prt
                 {
-                    if (!strcmp(LAZY_SECT_NAME, current_section->sectname))
+                    if ((!strcmp(LAZY_SECT_NAME, current_section->sectname)) || (!strcmp("__lazy_symbol", current_section->sectname)))
                     {
                         *import_table_offset = current_section->addr;
                         *indirect_symbols_index = current_section->reserved1;
@@ -239,54 +241,73 @@ void *mach_hook_init(char const *library_filename, void const *library_address)
     uint32_t import_table_offset = 0;  //the offset of (__DATA, __la_symbol_ptr) or (__IMPORT, __jump_table)
     uint32_t jump_table_present = 0;  //flag to tell the __IMPORT, __jump_table section is present (seems, only for Leopard)
 
-    if (!library_filename || !library_address)
+    if (!library_filename || !library_address) {
+		fprintf(stderr, "bad filename %x or library address %x.\n", (int)library_filename, (int)library_address);
 		return ret;
+	}
 
     descriptor = open(library_filename, O_RDONLY);
 
-    if (descriptor < 0)
+    if (descriptor < 0) {
+		fprintf(stderr, "Cannot open file %s.\n", library_filename);
         return ret;
-
+	}
+	
     head_offset = read_head_offset(descriptor);  //get mach-o header offset, not zero for fat binary
 
-    if (INVALID_OFFSET == head_offset)
+    if (INVALID_OFFSET == head_offset) {
+		fprintf(stderr, "read head offset failed.\n");
         goto free;
-
+	}
     load_commands_count = ((struct mach_header const *)library_address)->ncmds;
     load_commands = (struct load_command *)read_file(descriptor, head_offset + sizeof(struct mach_header),
                                                      ((struct mach_header const *)library_address)->sizeofcmds);  //read all load commands
 
-    if (!read_load_command(load_commands, load_commands_count, LC_SYMTAB, &symtab_cmd, sizeof(symtab_cmd)))  //read SYMTAB load command
+    if (!read_load_command(load_commands, load_commands_count, LC_SYMTAB, &symtab_cmd, sizeof(symtab_cmd))){  //read SYMTAB load command
+		fprintf(stderr, "read load command failed.\n");
         goto free;
-
-    if (0 == symtab_cmd.nsyms || 0 == symtab_cmd.strsize)
+	}
+	
+    if (0 == symtab_cmd.nsyms || 0 == symtab_cmd.strsize) {
+		fprintf(stderr, "Empty symtab.\n");
         goto free;
-
+	}
+	
     string_table = (char const *)read_file(descriptor, head_offset + symtab_cmd.stroff, symtab_cmd.strsize);  //read string table
     symbol_table = (struct nlist const *)read_file(descriptor, head_offset + symtab_cmd.symoff,
                                                    symtab_cmd.nsyms * sizeof(struct nlist));  //read symbol table
 
-    if (!string_table || !symbol_table)
+    if (!string_table || !symbol_table) {
+		fprintf(stderr, "Read string/symbol table failed.\n");
         goto free;
-
-    if (!read_load_command(load_commands, load_commands_count, LC_DYSYMTAB, &dysymtab_cmd, sizeof(dysymtab_cmd)))  //read DYSYMTAB
+	}
+	
+    if (!read_load_command(load_commands, load_commands_count, LC_DYSYMTAB, &dysymtab_cmd, sizeof(dysymtab_cmd))) {  //read DYSYMTAB
+		fprintf(stderr, "read load command failed.\n");
         goto free;
-
-    if (0 == dysymtab_cmd.nundefsym || 0 == dysymtab_cmd.nindirectsyms)
+	}
+	
+    if (0 == dysymtab_cmd.nundefsym || 0 == dysymtab_cmd.nindirectsyms) {
+		fprintf(stderr, "empty dysymtab.\n");
         goto free;
-
+	}
+	
     indirect_table = (uint32_t const *)read_file(descriptor, head_offset + dysymtab_cmd.indirectsymoff,
                                                  dysymtab_cmd.nindirectsyms * sizeof(uint32_t));  //read indirect symbol table
 
-    if (!indirect_table)
+    if (!indirect_table) {
+		fprintf(stderr, "read indirect table failed.\n");
         goto free;
-
+	}
+	
     read_indirect_table_info((struct load_command const *)((char const *)(library_address) + sizeof(struct mach_header)),
                              load_commands_count, &indirect_symbols_index, &import_table_offset, &jump_table_present);  //read necessary info about indirect symbols from memory
 
-    if (!import_table_offset)
+    if (!import_table_offset) {
+		fprintf(stderr, "import table offset failed.\n");
         goto free;
-
+	}
+	
     ret = (struct mach_hook_handle *)malloc(sizeof(struct mach_hook_handle));
 
     if (!ret)
