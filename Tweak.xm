@@ -33,6 +33,7 @@ the generation of a class list and an automatic constructor.
 %end
 */
 #include <dlfcn.h>
+#include <mach-o/dyld.h>
 #include "mach_hook/mach_hook.h"
 #include <sys/stat.h>
 
@@ -111,25 +112,29 @@ void* hook_libfunc(const char* funcname, void* replacefunc) {
     void *handle = 0;  //handle to store hook-related info
     mach_substitution original = NULL;  //original data for restoration
 
-    // Find an address in main executable
-    void* main_symbol = dlsym(RTLD_MAIN_ONLY, "start");
-    if (!main_symbol) {
-        fprintf(stderr, "Cannot find start() in the main executable.\n");
-        //return NULL;
-        main_symbol = (void*)0x1000;
-    }
-    
-	Dl_info info;
-	if (!dladdr(main_symbol, &info))  // Get main executable information
-    {
-        fprintf(stderr, "Failed to get the base address of the main executable!\n");
-        return NULL;
-    }
-
-    handle = mach_hook_init(info.dli_fname, info.dli_fbase);
+	char imagename[1024];
+	uint32_t size = sizeof(imagename);
+	if (_NSGetExecutablePath(imagename, &size) != 0) {
+		fprintf(stderr, "Cannot get image path.\n");
+		return NULL;
+	}
+	const void* imagebase = NULL;
+	int i=0;
+	while ( (imagebase = _dyld_get_image_header(i)) != NULL) {
+		fprintf(stderr, "%.8x: %s\n", (int)_dyld_get_image_header(i), _dyld_get_image_name(i));
+		if (!strcmp(imagename, _dyld_get_image_name(i)))
+			break;
+	    i++;
+	}
+	if (imagebase == NULL) {
+	    fprintf(stderr, "Cannot find image header.\n");
+		return NULL;
+	}
+	
+    handle = mach_hook_init(imagename, imagebase);
     if (!handle)
     {
-        fprintf(stderr, "mac_hook_init on %p %s failed!\n", info.dli_fbase, info.dli_fname);
+        fprintf(stderr, "mac_hook_init on %p %s failed!\n", imagebase, imagename);
         return NULL;
     }
 
