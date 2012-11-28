@@ -151,7 +151,7 @@ void read_indirect_table_info(struct load_command const *load_commands, uint32_t
                               uint32_t *indirect_symbols_index, uint32_t *import_table_offset, uint32_t *jump_table_present)
 {
     struct load_command const *current_load_command = load_commands;
-    uint32_t i;
+    uint32_t i, offset = 0x1000;
 
     if (!load_commands || !indirect_symbols_index || !import_table_offset || !jump_table_present)
         return;
@@ -167,7 +167,12 @@ void read_indirect_table_info(struct load_command const *load_commands, uint32_t
             struct section const *current_section;  //iterator for sections
             uint32_t sections_count;  //segment_command.nsects
             uint32_t j;
-
+             
+            // A hack to deal with ASLR: assuming the __TEXT segment is the first segment to load, its vmaddr gives an offset from which the import table offset is adjusted.
+            // the import_table_offset is defined as offset to loaded image base of main module.
+            if (!strcmp("__TEXT", ((struct segment_command const *)current_load_command)->segname))  //if __TEXT segment
+				offset = ((struct segment_command const *)current_load_command)->vmaddr;
+			
             if (!strcmp(DATA_SEG_NAME, ((struct segment_command const *)current_load_command)->segname))  //if __DATA segment
             {
                 sections_count = ((struct segment_command const *)current_load_command)->nsects;
@@ -217,6 +222,9 @@ void read_indirect_table_info(struct load_command const *load_commands, uint32_t
 
         current_load_command = (struct load_command const *)(((char const *)current_load_command) + current_load_command->cmdsize);
     }
+	
+	if (*import_table_offset)
+		*import_table_offset -= offset;
 }
 //==================================================================================================
 #ifdef __cplusplus
@@ -418,7 +426,7 @@ mach_substitution mach_hook(void const *h, char const *function_name, mach_subst
         //ret = (mach_substitution)(*import_table_entry);  //remember original address
         //*import_table_entry = (size_t)substitution;  //write new
 
-        import_table_entry = (size_t *)( handle->import_table_offset + import_table_entry_index * sizeof(size_t));  //compute the address of the target relocation
+        import_table_entry = (size_t *)( (uint32_t)handle->library_address + handle->import_table_offset + import_table_entry_index * sizeof(size_t));  //compute the address of the target relocation
         fprintf(stderr, "import_off %d, import_idx %d, entry: %p\n", handle->import_table_offset, import_table_entry_index, import_table_entry);
 
         ret = *import_table_entry;
