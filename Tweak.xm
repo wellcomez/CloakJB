@@ -40,7 +40,7 @@ the generation of a class list and an automatic constructor.
 #include <netinet/in.h>
 #include <errno.h>
 int my_connect(int socket, const struct sockaddr *address, socklen_t address_len) {
-    fprintf(stderr, "connect called.");
+    fprintf(stderr, "connect called.\n");
     if (address) {
         struct sockaddr_in * addr = (struct sockaddr_in*)address;
         if (ntohs(addr->sin_port) == 22 || ntohs(addr->sin_port) == 51022) {
@@ -53,26 +53,58 @@ int my_connect(int socket, const struct sockaddr *address, socklen_t address_len
 
 long my_ptrace(int request, pid_t pid, void *addr, void *data) {
     if (request != 31) // ptrace_deny_attach
-        fprintf(stderr, "Unimplemented ptrace surrogate %d.", request);
-    
+        fprintf(stderr, "Unimplemented ptrace surrogate %d.\n", request);
+    fprintf(stderr, "ptrace() call denied.\n");
     return 0;
 }
 void* my_dlsym(void* handle, const char* symbol) {
-    fprintf(stderr, "dlsym called: %p %s", handle, symbol);
+    fprintf(stderr, "dlsym called: %p %s\n", handle, symbol);
     if (!strcmp(symbol, "ptrace")) 
         return (void*) my_ptrace;
     else
         return dlsym(handle, symbol);
 }
 
+bool hideJailbreakingFile(const char* path) {
+   const char* lists[] = {
+	"/Library/MobileSubstrate/",
+	"/Applications/Cydia.app",
+	"/var/cache/apt",
+	"/var/lib/apt",
+	"/var/lib/cydia",
+	"/etc/apt",
+	NULL
+   };
+   for(int i=0; lists[i]; i++) {
+       if (!strncmp(path, lists[i], strlen(lists[i])))
+	       return true;
+   }
+   return false;
+}
 int my_stat(const char * path, struct stat * buf) {
-    fprintf(stderr, "stat called: %s", path);
-    return stat(path, buf);
+    if (hideJailbreakingFile(path)) {
+		fprintf(stderr, "stat: hiding %s\n", path);
+		return -1;
+	} else {
+		fprintf(stderr, "stat called: %s\n", path);
+		return stat(path, buf);
+	}
 }
 
 int my_lstat(const char * path, struct stat * buf) {
-    fprintf(stderr, "lstat called: %s \n", path);
-    return lstat(path, buf);
+    if (hideJailbreakingFile(path)) {
+		fprintf(stderr, "lstat: hiding %s\n", path);
+		return -1;
+	} else if (!strcmp(path, "/Applications")) {
+		fprintf(stderr, "Hide /Applications symlink.\n");
+		int r = lstat(path, buf);
+		if (!r) 
+			buf->st_mode = (buf->st_mode & (~S_IFMT)) | S_IFDIR;
+		return r;
+	} else {
+		fprintf(stderr, "lstat called: %s\n", path);
+		return lstat(path, buf);
+	}
 }
 
 void* hook_libfunc(const char* funcname, void* replacefunc) {
@@ -131,8 +163,8 @@ static void initializer() {
     for(int i=0; hooks[i].name; i++) {
         void* ret = hook_libfunc(hooks[i].name, hooks[i].func);
         if(!ret)
-            NSLog(@"hook_libfunc %s failed.", hooks[i].name);
+            fprintf(stderr, "hook_libfunc %s failed.\n", hooks[i].name);
         else
-            NSLog(@"hook_libfunc %s succeed: %p.", hooks[i].name, ret);
+            fprintf(stderr, "hook_libfunc %s succeed: %p.\n", hooks[i].name, ret);
         }
 }
