@@ -77,6 +77,7 @@ uint32_t read_head_offset(int descriptor)  //returns offset to the target mach-o
     {
 		cpu_type_t		sHostCPU;
 		cpu_subtype_t	sHostCPUsubtype;
+		cpu_subtype_t bestSubtype = -1;
 		size_t valSize = sizeof(sHostCPU);
 		if (sysctlbyname ("hw.cputype", &sHostCPU, &valSize, NULL, 0) != 0)  {
 			fprintf(stderr, "Cannot get cputype.\n");
@@ -101,18 +102,19 @@ uint32_t read_head_offset(int descriptor)  //returns offset to the target mach-o
         {
             cpu_type = OSSwapInt32(fat_arch_i->cputype);
             cpu_subtype = OSSwapInt32(fat_arch_i->cpusubtype);
+            fprintf(stderr, "mach-o cpu: %d %d; expected: %d %d.\n", cpu_type, cpu_subtype, sHostCPU, sHostCPUsubtype);
 
-			if (sHostCPU == cpu_type && sHostCPUsubtype == cpu_subtype)
-			{
-				ret = OSSwapInt32(fat_arch_i->offset);
-
-				break;
-			} else if (sHostCPU == cpu_type) { // Remember the arch for now in case their isn't a perfect subtype match
-				ret = OSSwapInt32(fat_arch_i->offset);
-			}
+	    if (sHostCPU == cpu_type && cpu_subtype <= sHostCPUsubtype )
+	    {
+	        if (cpu_subtype > bestSubtype) {
+			bestSubtype = cpu_subtype;
+			ret = OSSwapInt32(fat_arch_i->offset);
+			fprintf(stderr, "Found better CPU match.\n");
+		}
+	    }
         }
 
-		free((void *)fat_archs);
+	free((void *)fat_archs);
     }
 
     return ret;
@@ -184,7 +186,7 @@ void read_indirect_table_info(struct load_command const *load_commands, uint32_t
                     {
                         *import_table_offset = current_section->addr;
                         *indirect_symbols_index = current_section->reserved1;
-
+			fprintf(stderr, "lazy_symbol offset: %x", (int)current_section->addr);
                         break;
                     }
 
@@ -223,8 +225,10 @@ void read_indirect_table_info(struct load_command const *load_commands, uint32_t
         current_load_command = (struct load_command const *)(((char const *)current_load_command) + current_load_command->cmdsize);
     }
 	
-	if (*import_table_offset)
+	if (*import_table_offset) {
 		*import_table_offset -= offset;
+		fprintf(stderr, "import table offset adjust: %x", offset);
+	}
 }
 //==================================================================================================
 #ifdef __cplusplus
